@@ -76,7 +76,10 @@ export default function StaffDashboard() {
         queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() });
       },
-      onError: (error) => toast({ title: "Action failed", description: error.error, variant: "destructive" })
+      onError: (error: unknown) => {
+        const e = error as { data?: { error?: string }; message?: string };
+        toast({ title: "Action failed", description: e.data?.error || e.message || "An error occurred", variant: "destructive" });
+      }
     });
   };
 
@@ -94,7 +97,10 @@ export default function StaffDashboard() {
         setRejectionReason("");
         setSelectedBooking(null);
       },
-      onError: (error) => toast({ title: "Action failed", description: error.error, variant: "destructive" })
+      onError: (error: unknown) => {
+        const e = error as { data?: { error?: string }; message?: string };
+        toast({ title: "Action failed", description: e.data?.error || e.message || "An error occurred", variant: "destructive" });
+      }
     });
   };
 
@@ -105,7 +111,10 @@ export default function StaffDashboard() {
         queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() });
       },
-      onError: (error) => toast({ title: "Action failed", description: error.error, variant: "destructive" })
+      onError: (error: unknown) => {
+        const e = error as { data?: { error?: string }; message?: string };
+        toast({ title: "Action failed", description: e.data?.error || e.message || "An error occurred", variant: "destructive" });
+      }
     });
   };
 

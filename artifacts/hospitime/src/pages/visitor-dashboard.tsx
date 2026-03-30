@@ -102,10 +102,11 @@ export default function VisitorDashboard() {
         setIsDialogOpen(false);
         form.reset();
       },
-      onError: (error) => {
+      onError: (error: unknown) => {
+        const e = error as { data?: { error?: string }; message?: string };
         toast({ 
           title: "Failed to submit request", 
-          description: error.error || "An error occurred", 
+          description: e.data?.error || e.message || "An error occurred", 
           variant: "destructive" 
         });
       }

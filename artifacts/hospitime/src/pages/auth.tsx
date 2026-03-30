@@ -70,6 +70,14 @@ export default function AuthPage() {
     }
   }, [user, isLoading, setLocation]);
 
+  const getErrorMessage = (error: unknown): string => {
+    if (error && typeof error === "object") {
+      const e = error as { data?: { error?: string }; message?: string };
+      return e.data?.error || e.message || "An unexpected error occurred";
+    }
+    return "An unexpected error occurred";
+  };
+
   const onLoginSubmit = (values: z.infer<typeof loginSchema>) => {
     loginMutation.mutate({ data: values }, {
       onSuccess: (response) => {
@@ -79,7 +87,7 @@ export default function AuthPage() {
       onError: (error) => {
         toast({ 
           title: "Sign in failed", 
-          description: error.error || "An unexpected error occurred", 
+          description: getErrorMessage(error),
           variant: "destructive" 
         });
       }
@@ -95,7 +103,7 @@ export default function AuthPage() {
       onError: (error) => {
         toast({ 
           title: "Registration failed", 
-          description: error.error || "An unexpected error occurred", 
+          description: getErrorMessage(error),
           variant: "destructive" 
         });
       }
