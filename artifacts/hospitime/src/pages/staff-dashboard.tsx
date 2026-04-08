@@ -2,31 +2,30 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { LayoutWrapper } from "@/components/layout-wrapper";
-import { 
-  useGetStaffStats, 
-  useGetBookings, 
-  useApproveBooking,
+import {
+  useGetStaffStats,
+  useGetBookings,
+  useGetRecentActivity,
   useRejectBooking,
   useCancelBooking,
-  getGetStaffStatsQueryKey, 
+  getGetStaffStatsQueryKey,
   getGetBookingsQueryKey,
-  BookingStatus,
   Booking,
   GetBookingsStatus
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
-import { 
-  CheckCircle2, 
-  XCircle, 
-  Users, 
-  Clock, 
+import { format, isToday, isTomorrow } from "date-fns";
+import {
+  CheckCircle2,
+  Users,
+  Clock,
   Calendar as CalendarIcon,
-  ChevronDown,
-  Search,
   Filter,
-  AlertCircle
+  AlertCircle,
+  Activity,
+  TrendingDown,
+  TrendingUp
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -38,6 +37,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { WardSchedule } from "@/components/ward-schedule";
+import { parseBookingNotes, QUICK_INSTRUCTIONS } from "@/lib/booking-utils";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function StaffDashboard() {
   const [, setLocation] = useLocation();
@@ -49,6 +52,11 @@ export default function StaffDashboard() {
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [approveDialogOpen, setApproveDialogOpen] = useState(false);
+  const [bookingToApprove, setBookingToApprove] = useState<Booking | null>(null);
+  const [approveInstructions, setApproveInstructions] = useState<string[]>([]);
+  const [approveCustomNote, setApproveCustomNote] = useState("");
+  const [approvePending, setApprovePending] = useState(false);
 
   useEffect(() => {
     if (!authLoading && (!user || user.role !== "staff")) {
@@ -56,31 +64,50 @@ export default function StaffDashboard() {
     }
   }, [user, authLoading, setLocation]);
 
-  const { data: stats, isLoading: statsLoading } = useGetStaffStats({
-    query: { enabled: !!user && user.role === "staff" }
-  });
+  const { data: stats, isLoading: statsLoading } = useGetStaffStats();
 
   const queryParams = statusFilter === "all" ? undefined : { status: statusFilter as GetBookingsStatus };
-  const { data: bookings, isLoading: bookingsLoading } = useGetBookings(queryParams, {
-    query: { enabled: !!user && user.role === "staff" }
-  });
+  const { data: bookings, isLoading: bookingsLoading } = useGetBookings(queryParams);
+  const { data: recentActivity, isLoading: activityLoading } = useGetRecentActivity();
 
-  const approveMutation = useApproveBooking();
   const rejectMutation = useRejectBooking();
   const cancelMutation = useCancelBooking();
 
-  const handleApprove = (id: number) => {
-    approveMutation.mutate({ id }, {
-      onSuccess: () => {
-        toast({ title: "Booking approved", description: "The visitor has been notified." });
-        queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
-        queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() });
-      },
-      onError: (error: unknown) => {
-        const e = error as { data?: { error?: string }; message?: string };
-        toast({ title: "Action failed", description: e.data?.error || e.message || "An error occurred", variant: "destructive" });
+  const openApproveDialog = (booking: Booking) => {
+    setBookingToApprove(booking);
+    setApproveInstructions([]);
+    setApproveCustomNote("");
+    setApproveDialogOpen(true);
+  };
+
+  const handleApprove = async () => {
+    if (!bookingToApprove) return;
+    setApprovePending(true);
+    const parts = [...approveInstructions];
+    if (approveCustomNote.trim()) parts.push(approveCustomNote.trim());
+    const instructions = parts.length > 0 ? parts.join("\n") : null;
+    try {
+      const res = await fetch(`/api/bookings/${bookingToApprove.id}/approve`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to approve");
       }
-    });
+      toast({ title: "Booking approved", description: "The visitor has been notified." });
+      queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() });
+      setApproveDialogOpen(false);
+      setBookingToApprove(null);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "An error occurred";
+      toast({ title: "Action failed", description: msg, variant: "destructive" });
+    } finally {
+      setApprovePending(false);
+    }
   };
 
   const handleReject = () => {
@@ -126,6 +153,13 @@ export default function StaffDashboard() {
 
   if (authLoading || !user) return null;
 
+  const formatRelativeDate = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isToday(d)) return "Today";
+    if (isTomorrow(d)) return "Tomorrow";
+    return format(d, "MMM dd, yyyy");
+  };
+
   // Group bookings: pending first, then sort by visit date
   const sortedBookings = bookings ? [...bookings].sort((a, b) => {
     if (a.status === 'pending' && b.status !== 'pending') return -1;
@@ -141,6 +175,8 @@ export default function StaffDashboard() {
           <p className="text-slate-500 mt-1">Manage visitor access and review pending requests.</p>
         </div>
 
+        {/* Stats always visible */}
+
         {/* Stats Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <Card className="bg-primary text-white border-none shadow-md relative overflow-hidden">
@@ -151,42 +187,82 @@ export default function StaffDashboard() {
               <CardTitle className="text-sm font-medium text-white/80">Action Required</CardTitle>
             </CardHeader>
             <CardContent className="px-4 pb-4 relative z-10">
-              <div className="text-3xl font-bold">{statsLoading ? "-" : stats?.pendingRequests || 0}</div>
+              {statsLoading
+                ? <div className="h-9 w-12 bg-white/20 animate-pulse rounded" />
+                : <div className="text-3xl font-bold">{stats?.pendingRequests ?? 0}</div>
+              }
               <p className="text-xs text-white/80 mt-1">Pending requests</p>
             </CardContent>
           </Card>
-          
+
           <Card className="bg-white shadow-sm border-slate-200">
             <CardHeader className="flex flex-row items-center justify-between pb-2 pt-4 px-4">
               <CardTitle className="text-sm font-medium text-slate-600">Today's Visits</CardTitle>
               <CalendarIcon className="h-4 w-4 text-emerald-500" />
             </CardHeader>
             <CardContent className="px-4 pb-4">
-              <div className="text-2xl font-bold text-slate-900">{statsLoading ? "-" : stats?.approvedToday || 0}</div>
+              {statsLoading
+                ? <div className="h-8 w-12 bg-slate-200 animate-pulse rounded" />
+                : <div className="text-2xl font-bold text-slate-900">{stats?.approvedToday ?? 0}</div>
+              }
             </CardContent>
           </Card>
-          
+
           <Card className="bg-white shadow-sm border-slate-200">
             <CardHeader className="flex flex-row items-center justify-between pb-2 pt-4 px-4">
               <CardTitle className="text-sm font-medium text-slate-600">Total Visitors</CardTitle>
               <Users className="h-4 w-4 text-primary" />
             </CardHeader>
             <CardContent className="px-4 pb-4">
-              <div className="text-2xl font-bold text-slate-900">{statsLoading ? "-" : stats?.totalVisitors || 0}</div>
+              {statsLoading
+                ? <div className="h-8 w-12 bg-slate-200 animate-pulse rounded" />
+                : <div className="text-2xl font-bold text-slate-900">{stats?.totalVisitors ?? 0}</div>
+              }
             </CardContent>
           </Card>
-          
+
           <Card className="bg-white shadow-sm border-slate-200">
             <CardHeader className="flex flex-row items-center justify-between pb-2 pt-4 px-4">
-              <CardTitle className="text-sm font-medium text-slate-600">Weekly Total</CardTitle>
-              <CheckCircle2 className="h-4 w-4 text-slate-400" />
+              <CardTitle className="text-sm font-medium text-slate-600">This Week</CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pb-4">
-              <div className="text-2xl font-bold text-slate-900">{statsLoading ? "-" : stats?.approvedThisWeek || 0}</div>
+            <CardContent className="px-4 pb-4 space-y-1">
+              {statsLoading ? (
+                <div className="h-8 w-12 bg-slate-200 animate-pulse rounded" />
+              ) : (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-1 text-emerald-600">
+                      <TrendingUp className="w-3.5 h-3.5" /> Approved
+                    </span>
+                    <span className="font-bold text-slate-900">{stats?.approvedThisWeek ?? 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-1 text-rose-500">
+                      <TrendingDown className="w-3.5 h-3.5" /> Declined
+                    </span>
+                    <span className="font-bold text-slate-900">{stats?.rejectedThisWeek ?? 0}</span>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
 
+        <Tabs defaultValue="requests" className="space-y-4">
+          <TabsList className="h-10">
+            <TabsTrigger value="requests" className="text-sm">
+              Visitor Requests
+              {stats && stats.pendingRequests > 0 && (
+                <span className="ml-2 bg-primary text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
+                  {stats.pendingRequests}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="schedule" className="text-sm">Ward Schedule</TabsTrigger>
+            <TabsTrigger value="activity" className="text-sm">Recent Activity</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="requests" className="space-y-0">
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
           <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <h2 className="text-lg font-semibold text-slate-900 flex items-center">
@@ -211,7 +287,16 @@ export default function StaffDashboard() {
           </div>
 
           {bookingsLoading ? (
-            <div className="p-8 text-center text-slate-500">Loading requests...</div>
+            <div className="divide-y divide-slate-100">
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className="flex items-center gap-4 p-4 animate-pulse">
+                  <div className="h-5 w-20 bg-slate-200 rounded-full" />
+                  <div className="h-4 w-28 bg-slate-200 rounded" />
+                  <div className="h-4 w-36 bg-slate-200 rounded" />
+                  <div className="h-4 w-28 bg-slate-200 rounded ml-auto" />
+                </div>
+              ))}
+            </div>
           ) : sortedBookings.length === 0 ? (
             <div className="p-12 text-center">
               <div className="bg-slate-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-200">
@@ -247,8 +332,8 @@ export default function StaffDashboard() {
                           <BookingStatusBadge status={booking.status} />
                         </TableCell>
                         <TableCell>
-                          <div className="font-medium text-slate-900 whitespace-nowrap">
-                            {format(new Date(booking.visitDate), "MMM dd, yyyy")}
+                          <div className={`font-medium whitespace-nowrap ${isToday(new Date(booking.visitDate)) ? "text-primary" : "text-slate-900"}`}>
+                            {formatRelativeDate(booking.visitDate)}
                           </div>
                           <div className="text-sm text-slate-500 flex items-center mt-1">
                             <Clock className="w-3 h-3 mr-1" />
@@ -280,16 +365,16 @@ export default function StaffDashboard() {
                                 variant="outline" 
                                 className="text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
                                 onClick={() => openRejectDialog(booking)}
-                                disabled={rejectMutation.isPending || approveMutation.isPending}
+                                disabled={rejectMutation.isPending || approvePending}
                                 data-testid={`button-reject-${booking.id}`}
                               >
                                 Decline
                               </Button>
-                              <Button 
-                                size="sm" 
+                              <Button
+                                size="sm"
                                 className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                                onClick={() => handleApprove(booking.id)}
-                                disabled={rejectMutation.isPending || approveMutation.isPending}
+                                onClick={() => openApproveDialog(booking)}
+                                disabled={rejectMutation.isPending || approvePending}
                                 data-testid={`button-approve-${booking.id}`}
                               >
                                 Approve
@@ -320,7 +405,146 @@ export default function StaffDashboard() {
             </div>
           )}
         </div>
+          </TabsContent>
+
+          <TabsContent value="schedule">
+            <WardSchedule bookings={bookings ?? []} />
+          </TabsContent>
+
+          <TabsContent value="activity">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
+                <Activity className="w-4 h-4 text-slate-500" />
+                <h2 className="text-base font-semibold text-slate-900">Recent Activity</h2>
+              </div>
+              {activityLoading ? (
+                <div className="divide-y divide-slate-100">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="flex items-center gap-3 p-3 animate-pulse">
+                      <div className="w-2 h-2 rounded-full bg-slate-200 shrink-0" />
+                      <div className="h-4 w-48 bg-slate-200 rounded" />
+                      <div className="h-3 w-20 bg-slate-100 rounded ml-auto" />
+                    </div>
+                  ))}
+                </div>
+              ) : !recentActivity || recentActivity.length === 0 ? (
+                <p className="text-sm text-slate-500 p-4 text-center">No recent activity.</p>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {recentActivity.slice(0, 20).map((item) => (
+                    <li key={item.id} className="flex items-center gap-3 px-4 py-3 text-sm">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        item.status === "approved" ? "bg-emerald-500" :
+                        item.status === "rejected" ? "bg-rose-500" :
+                        item.status === "cancelled" ? "bg-slate-400" : "bg-amber-400"
+                      }`} />
+                      <span className="text-slate-700 flex-1">
+                        <span className="font-medium">{item.visitorName}</span>
+                        <span className="text-slate-500"> — {item.action}</span>
+                        <span className="text-slate-400 text-xs ml-2">{item.visitDate}</span>
+                      </span>
+                      <span className="text-xs text-slate-400 whitespace-nowrap">
+                        {format(new Date(item.timestamp), "MMM d, HH:mm")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
       </div>
+
+      <Dialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Approve Visit Request</DialogTitle>
+            <DialogDescription>
+              Optionally attach arrival instructions for <strong>{bookingToApprove?.visitorName}</strong>. These will be shown on their booking confirmation.
+            </DialogDescription>
+          </DialogHeader>
+          {bookingToApprove && (
+            <div className="py-2 space-y-4 text-sm max-h-[70vh] overflow-y-auto pr-1">
+              {/* Booking summary */}
+              <div className="bg-slate-50 rounded-lg p-3 space-y-1.5 border border-slate-200">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Patient</span>
+                  <span className="font-medium text-slate-900">{bookingToApprove.patientName}</span>
+                </div>
+                {bookingToApprove.ward && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Ward</span>
+                    <span className="font-medium text-slate-900">{bookingToApprove.ward}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Date &amp; Time</span>
+                  <span className="font-medium text-slate-900">{format(new Date(bookingToApprove.visitDate), "MMM dd, yyyy")} · {bookingToApprove.visitTime} ({bookingToApprove.durationMinutes} min)</span>
+                </div>
+                {(() => {
+                  const meta = parseBookingNotes(bookingToApprove.notes);
+                  return meta.relationship ? (
+                    <div className="flex justify-between pt-1 border-t border-slate-200 mt-1">
+                      <span className="text-slate-500">Visitor</span>
+                      <span className="font-medium text-slate-900">
+                        {meta.relationship}{meta.visitorCount ? ` · ${meta.visitorCount} person${meta.visitorCount > 1 ? "s" : ""}` : ""}
+                      </span>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+
+              {/* Quick instruction chips */}
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Arrival Instructions (optional)</Label>
+                <div className="space-y-1.5">
+                  {QUICK_INSTRUCTIONS.map((instr) => {
+                    const checked = approveInstructions.includes(instr);
+                    return (
+                      <div
+                        key={instr}
+                        className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${checked ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}
+                        onClick={() => setApproveInstructions(prev =>
+                          checked ? prev.filter(i => i !== instr) : [...prev, instr]
+                        )}
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(v) => setApproveInstructions(prev =>
+                            v ? [...prev, instr] : prev.filter(i => i !== instr)
+                          )}
+                          className="mt-0.5 shrink-0"
+                        />
+                        <span className="text-sm text-slate-700 leading-snug">{instr}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Free-text note */}
+              <div className="space-y-1.5">
+                <Label htmlFor="custom-note" className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Additional Note (optional)</Label>
+                <Textarea
+                  id="custom-note"
+                  placeholder="e.g. Please call the ward desk when you arrive at Level 3."
+                  value={approveCustomNote}
+                  onChange={(e) => setApproveCustomNote(e.target.value)}
+                  className="resize-none h-20 text-sm"
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveDialogOpen(false)} disabled={approvePending}>
+              Cancel
+            </Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleApprove} disabled={approvePending} data-testid="button-confirm-approve">
+              {approvePending ? "Approving..." : "Approve Visit"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
         <DialogContent className="sm:max-w-[425px]">
@@ -331,10 +555,43 @@ export default function StaffDashboard() {
             </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
+            {selectedBooking && (
+              <div className="bg-slate-50 rounded-lg p-3 space-y-1.5 text-sm border border-slate-200">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Patient</span>
+                  <span className="font-medium text-slate-900">{selectedBooking.patientName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Date</span>
+                  <span className="font-medium text-slate-900">{formatRelativeDate(selectedBooking.visitDate)} · {selectedBooking.visitTime}</span>
+                </div>
+                {(() => {
+                  const meta = parseBookingNotes(selectedBooking.notes);
+                  return (
+                    <>
+                      {meta.relationship && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Relationship</span>
+                          <span className="font-medium text-slate-900">
+                            {meta.relationship}{meta.visitorCount ? ` · ${meta.visitorCount} visitor${meta.visitorCount > 1 ? "s" : ""}` : ""}
+                          </span>
+                        </div>
+                      )}
+                      {meta.userNotes && (
+                        <div className="pt-1 border-t border-slate-200 text-slate-600">
+                          <span className="text-slate-500 block mb-0.5">Visitor note:</span>
+                          <span className="italic">"{meta.userNotes}"</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="reason">Reason (Optional but recommended)</Label>
-              <Textarea 
-                id="reason" 
+              <Textarea
+                id="reason"
                 placeholder="e.g. Ward is currently restricted to essential medical staff only..."
                 value={rejectionReason}
                 onChange={(e) => setRejectionReason(e.target.value)}

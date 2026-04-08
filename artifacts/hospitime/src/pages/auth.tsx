@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { motion, AnimatePresence } from "framer-motion";
@@ -58,15 +58,11 @@ export default function AuthPage() {
     defaultValues: { name: "", email: "", password: "", role: "visitor", staffCode: "" },
   });
 
-  const selectedRole = registerForm.watch("role");
+  const selectedRole = useWatch({ control: registerForm.control, name: "role" });
 
   useEffect(() => {
     if (user && !isLoading) {
-      if (user.role === "staff") {
-        setLocation("/staff-dashboard");
-      } else {
-        setLocation("/visitor-dashboard");
-      }
+      setLocation(user.role === "staff" ? "/staff-dashboard" : "/visitor-dashboard");
     }
   }, [user, isLoading, setLocation]);
 
@@ -123,10 +119,11 @@ export default function AuthPage() {
         {/* Background Image Container */}
         <div className="absolute inset-0 z-0">
           <div className="absolute inset-0 bg-primary/90 mix-blend-multiply z-10" />
-          <img 
-            src="/auth-bg.png" 
-            alt="Hospital waiting area" 
+          <img
+            src="/auth-bg.png"
+            alt="Hospital waiting area"
             className="w-full h-full object-cover opacity-60 grayscale"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
           />
         </div>
         
@@ -172,21 +169,33 @@ export default function AuthPage() {
       </div>
 
       {/* Form Panel */}
-      <div className="flex items-center justify-center p-6 sm:p-12 lg:p-24 relative">
+      <div className="flex items-center justify-center p-6 sm:p-12 lg:p-16 relative bg-white">
         <div className="w-full max-w-md">
-          <div className="lg:hidden flex items-center gap-2 mb-8 justify-center">
-            <div className="bg-primary/10 p-2 rounded-lg text-primary">
-              <Activity className="w-6 h-6" />
+          <div className="lg:hidden flex flex-col items-center gap-1 mb-10 text-center">
+            <div className="bg-primary/10 p-3 rounded-xl text-primary mb-2">
+              <Activity className="w-7 h-7" />
             </div>
             <span className="font-bold text-2xl tracking-tight text-slate-900">HospiTime</span>
+            <span className="text-sm text-slate-500">ICU Visitor Coordination</span>
+          </div>
+
+          <div className="hidden lg:block mb-8">
+            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+              {activeTab === "login" ? "Welcome back" : "Create your account"}
+            </h2>
+            <p className="text-slate-500 mt-1 text-sm">
+              {activeTab === "login"
+                ? "Sign in to manage your ICU visit requests."
+                : "Register to start scheduling structured visits."}
+            </p>
           </div>
 
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "login" | "register")} className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-8 h-12">
-              <TabsTrigger value="login" className="text-sm font-medium" data-testid="tab-login">Sign In</TabsTrigger>
-              <TabsTrigger value="register" className="text-sm font-medium" data-testid="tab-register">Register</TabsTrigger>
+            <TabsList className="grid w-full grid-cols-2 mb-6 h-11 bg-slate-100 rounded-xl p-1">
+              <TabsTrigger value="login" className="text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm" data-testid="tab-login">Sign In</TabsTrigger>
+              <TabsTrigger value="register" className="text-sm font-semibold rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm" data-testid="tab-register">Register</TabsTrigger>
             </TabsList>
-            
+
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -196,9 +205,9 @@ export default function AuthPage() {
                 transition={{ duration: 0.2 }}
               >
                 {activeTab === "login" ? (
-                  <Card className="border-0 shadow-xl bg-white/50 backdrop-blur-xl">
-                    <CardHeader className="space-y-1 pb-6">
-                      <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
+                  <Card className="border border-slate-200 shadow-sm bg-white rounded-2xl">
+                    <CardHeader className="space-y-1 pb-5 pt-6 px-6 lg:hidden">
+                      <CardTitle className="text-xl font-bold tracking-tight">Welcome back</CardTitle>
                       <CardDescription className="text-slate-500">
                         Sign in to manage your visits and requests.
                       </CardDescription>
@@ -242,9 +251,9 @@ export default function AuthPage() {
                     </CardContent>
                   </Card>
                 ) : (
-                  <Card className="border-0 shadow-xl bg-white/50 backdrop-blur-xl">
-                    <CardHeader className="space-y-1 pb-6">
-                      <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
+                  <Card className="border border-slate-200 shadow-sm bg-white rounded-2xl">
+                    <CardHeader className="space-y-1 pb-5 pt-6 px-6 lg:hidden">
+                      <CardTitle className="text-xl font-bold tracking-tight">Create an account</CardTitle>
                       <CardDescription className="text-slate-500">
                         Join HospiTime to schedule structured visits.
                       </CardDescription>
@@ -254,7 +263,7 @@ export default function AuthPage() {
                         <div className="space-y-3 mb-6">
                           <Label>I am a...</Label>
                           <RadioGroup 
-                            defaultValue="visitor" 
+                            value={selectedRole}
                             onValueChange={(v) => registerForm.setValue("role", v as "visitor" | "staff")}
                             className="grid grid-cols-2 gap-4"
                             data-testid="radio-role"
@@ -359,10 +368,27 @@ export default function AuthPage() {
             </AnimatePresence>
           </Tabs>
           
-          <p className="text-center text-sm text-slate-500 mt-8">
-            This is a University of Hertfordshire dissertation project.<br/>
-            By Sedat Kucuk (23002046).
+          <p className="mt-5 text-center text-sm text-slate-500">
+            {activeTab === "login" ? (
+              <>New to HospiTime?{" "}
+                <button onClick={() => setActiveTab("register")} className="font-semibold text-primary hover:underline">
+                  Create an account
+                </button>
+              </>
+            ) : (
+              <>Already have an account?{" "}
+                <button onClick={() => setActiveTab("login")} className="font-semibold text-primary hover:underline">
+                  Sign in
+                </button>
+              </>
+            )}
           </p>
+
+          <div className="mt-8 text-center space-y-1 border-t border-slate-100 pt-6">
+            <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">University of Hertfordshire · Computer Science</p>
+            <p className="text-sm text-slate-500 font-medium">HospiTime — ICU Visitor Coordination System</p>
+            <p className="text-xs text-slate-400">Dissertation Project · Sedat Kucuk · 23002046</p>
+          </div>
         </div>
       </div>
     </div>

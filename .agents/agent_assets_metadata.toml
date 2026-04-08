@@ -1,8 +1,0 @@
-uploads = []
-outputs = []
-
-[[generated]]
-id = "qrR8mfvmN4iBkqfPiUTC2"
-uri = "file://artifacts/hospitime/public/auth-bg.png"
-type = "image"
-title = "Calm hospital waiting area"

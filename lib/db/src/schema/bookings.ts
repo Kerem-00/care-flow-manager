@@ -16,6 +16,7 @@ export const bookingsTable = pgTable("bookings", {
   notes: text("notes"),
   status: text("status", { enum: ["pending", "approved", "rejected", "cancelled"] }).notNull().default("pending"),
   rejectionReason: text("rejection_reason"),
+  staffInstructions: text("staff_instructions"),
   requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
   reviewedBy: text("reviewed_by"),

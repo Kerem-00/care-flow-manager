@@ -1,9 +1,8 @@
 import { ReactNode } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { Link } from "wouter";
 import { motion } from "framer-motion";
-import { Activity, LogOut, User as UserIcon } from "lucide-react";
+import { Activity, LogOut, User as UserIcon, ShieldCheck } from "lucide-react";
 
 export function LayoutWrapper({ children }: { children: ReactNode }) {
   const { user, logout, isLogoutPending } = useAuth();
@@ -20,26 +19,32 @@ export function LayoutWrapper({ children }: { children: ReactNode }) {
           </div>
 
           {user && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3 text-sm text-slate-600 mr-4">
-                <div className="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center border border-slate-200">
-                  <UserIcon className="w-4 h-4 text-slate-500" />
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-2.5">
+                <div className="bg-slate-100 w-8 h-8 rounded-full flex items-center justify-center border border-slate-200 shrink-0">
+                  {user.role === "staff"
+                    ? <ShieldCheck className="w-4 h-4 text-primary" />
+                    : <UserIcon className="w-4 h-4 text-slate-500" />
+                  }
                 </div>
-                <div className="hidden sm:block">
-                  <p className="font-medium text-slate-900">{user.name}</p>
-                  <p className="text-xs text-slate-500 capitalize">{user.role}</p>
+                <div>
+                  <p className="font-medium text-slate-900 text-sm leading-tight">{user.name}</p>
+                  <p className="text-xs text-slate-500 leading-tight capitalize">
+                    {user.role === "staff" ? "Ward Staff" : "Visitor"}
+                  </p>
                 </div>
               </div>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => logout()} 
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => logout()}
                 disabled={isLogoutPending}
-                className="text-slate-600 border-slate-200 hover:bg-slate-50"
+                className="text-slate-600 border-slate-200 hover:bg-slate-50 ml-1"
                 data-testid="button-logout"
               >
                 <LogOut className="w-4 h-4 mr-2" />
-                Sign out
+                <span className="hidden sm:inline">Sign out</span>
+                <span className="sm:hidden">Out</span>
               </Button>
             </div>
           )}

@@ -110,8 +110,10 @@ router.patch("/bookings/:id/approve", requireStaff, async (req, res): Promise<vo
     return;
   }
 
+  const instructions = req.body?.instructions || null;
+
   const [booking] = await db.update(bookingsTable)
-    .set({ status: "approved", reviewedAt: new Date(), reviewedBy: session.name })
+    .set({ status: "approved", reviewedAt: new Date(), reviewedBy: session.name, staffInstructions: instructions })
     .where(eq(bookingsTable.id, id))
     .returning();
 
