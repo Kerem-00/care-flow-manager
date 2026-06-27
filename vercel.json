@@ -3,6 +3,6 @@
     { "source": "/api/:path*", "destination": "https://hospitime-api.onrender.com/api/:path*" }
   ],
   "buildCommand": "pnpm --filter @workspace/hospitime run build",
-  "outputDirectory": "artifacts/hospitime/dist",
+  "outputDirectory": "artifacts/hospitime/dist/public",
   "installCommand": "pnpm install"
 }
