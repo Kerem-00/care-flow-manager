@@ -1,21 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { LayoutWrapper } from "@/components/layout-wrapper";
 import {
-  useGetStaffStats,
-  useGetBookings,
-  useGetRecentActivity,
   useRejectBooking,
   useCancelBooking,
   getGetStaffStatsQueryKey,
   getGetBookingsQueryKey,
+  getGetStaffStatsQueryOptions,
+  getGetBookingsQueryOptions,
+  getGetRecentActivityQueryOptions,
   Booking,
   GetBookingsStatus
 } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { format, isToday, isTomorrow } from "date-fns";
+import { format, isToday, isTomorrow, formatDistanceToNow } from "date-fns";
 import {
   CheckCircle2,
   Users,
@@ -23,9 +23,13 @@ import {
   Calendar as CalendarIcon,
   Filter,
   AlertCircle,
+  AlertTriangle,
   Activity,
   TrendingDown,
-  TrendingUp
+  TrendingUp,
+  Download,
+  RefreshCw,
+  Zap,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -39,6 +43,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WardSchedule } from "@/components/ward-schedule";
+import { StaffPatients } from "@/components/staff-patients";
+import { StaffMessages } from "@/components/staff-messages";
 import { parseBookingNotes, QUICK_INSTRUCTIONS } from "@/lib/booking-utils";
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -49,6 +55,7 @@ export default function StaffDashboard() {
   const queryClient = useQueryClient();
   
   const [statusFilter, setStatusFilter] = useState<GetBookingsStatus | "all">("all");
+  const [bookingSearch, setBookingSearch] = useState("");
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -57,6 +64,14 @@ export default function StaffDashboard() {
   const [approveInstructions, setApproveInstructions] = useState<string[]>([]);
   const [approveCustomNote, setApproveCustomNote] = useState("");
   const [approvePending, setApprovePending] = useState(false);
+  const [conflictData, setConflictData] = useState<{
+    totalVisitors: number;
+    incoming: number;
+    alreadyApproved: number;
+    overlapping: Booking[];
+  } | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (!authLoading && (!user || user.role !== "staff")) {
@@ -64,23 +79,89 @@ export default function StaffDashboard() {
     }
   }, [user, authLoading, setLocation]);
 
-  const { data: stats, isLoading: statsLoading } = useGetStaffStats();
+  const { data: stats, isLoading: statsLoading } = useQuery({ ...getGetStaffStatsQueryOptions(), refetchInterval: 60_000 });
 
   const queryParams = statusFilter === "all" ? undefined : { status: statusFilter as GetBookingsStatus };
-  const { data: bookings, isLoading: bookingsLoading } = useGetBookings(queryParams);
-  const { data: recentActivity, isLoading: activityLoading } = useGetRecentActivity();
+  const { data: bookings, isLoading: bookingsLoading } = useQuery({ ...getGetBookingsQueryOptions(queryParams), refetchInterval: 30_000 });
+  // Always fetch approved bookings separately for the today's schedule panel
+  const { data: approvedBookings } = useQuery({ ...getGetBookingsQueryOptions({ status: "approved" as GetBookingsStatus }), refetchInterval: 60_000 });
+  const { data: recentActivity, isLoading: activityLoading } = useQuery({ ...getGetRecentActivityQueryOptions(), refetchInterval: 60_000 });
+
+  // Unread family message count for Messages tab badge
+  const [unreadMsgCount, setUnreadMsgCount] = useState(0);
+  useEffect(() => {
+    const fetch_ = () =>
+      fetch("/api/messages/unread-count", { credentials: "include" })
+        .then(r => r.json())
+        .then(d => { if (typeof d?.count === "number") setUnreadMsgCount(d.count); })
+        .catch(() => {});
+    fetch_();
+    const id = setInterval(fetch_, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const rejectMutation = useRejectBooking();
   const cancelMutation = useCancelBooking();
+
+  // Notify staff when new pending bookings arrive during the session
+  const prevPendingCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    const count = stats?.pendingRequests ?? 0;
+    if (prevPendingCountRef.current !== null && count > prevPendingCountRef.current) {
+      const diff = count - prevPendingCountRef.current;
+      toast({
+        title: `${diff} new booking request${diff > 1 ? "s" : ""}`,
+        description: "A visitor has submitted a new visit request for your review.",
+      });
+    }
+    prevPendingCountRef.current = count;
+  }, [stats?.pendingRequests]);
+
+  const handleQuickApprove = async (booking: Booking) => {
+    try {
+      const res = await fetch(`/api/bookings/${booking.id}/approve`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instructions: null, force: false }),
+      });
+      if (res.status === 409) {
+        openApproveDialog(booking);
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to approve");
+      }
+      toast({ title: "Visit approved", description: `${booking.visitorName}'s visit has been confirmed.` });
+      queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "An error occurred";
+      toast({ title: "Action failed", description: msg, variant: "destructive" });
+    }
+  };
+
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() }),
+      queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() }),
+      new Promise(r => setTimeout(r, 600)),
+    ]);
+    setLastRefreshed(new Date());
+    setRefreshing(false);
+  };
 
   const openApproveDialog = (booking: Booking) => {
     setBookingToApprove(booking);
     setApproveInstructions([]);
     setApproveCustomNote("");
+    setConflictData(null);
     setApproveDialogOpen(true);
   };
 
-  const handleApprove = async () => {
+  const handleApprove = async (force = false) => {
     if (!bookingToApprove) return;
     setApprovePending(true);
     const parts = [...approveInstructions];
@@ -91,8 +172,13 @@ export default function StaffDashboard() {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions }),
+        body: JSON.stringify({ instructions, force }),
       });
+      if (res.status === 409) {
+        const data = await res.json();
+        setConflictData(data);
+        return;
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to approve");
@@ -102,6 +188,7 @@ export default function StaffDashboard() {
       queryClient.invalidateQueries({ queryKey: getGetStaffStatsQueryKey() });
       setApproveDialogOpen(false);
       setBookingToApprove(null);
+      setConflictData(null);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "An error occurred";
       toast({ title: "Action failed", description: msg, variant: "destructive" });
@@ -160,12 +247,52 @@ export default function StaffDashboard() {
     return format(d, "MMM dd, yyyy");
   };
 
-  // Group bookings: pending first, then sort by visit date
-  const sortedBookings = bookings ? [...bookings].sort((a, b) => {
-    if (a.status === 'pending' && b.status !== 'pending') return -1;
-    if (a.status !== 'pending' && b.status === 'pending') return 1;
-    return new Date(a.visitDate).getTime() - new Date(b.visitDate).getTime();
-  }) : [];
+  // CSV export for current booking view
+  const exportCSV = () => {
+    const rows = [
+      ["Status", "Patient", "Ward", "Visitor", "Email", "Date", "Time", "Duration", "Requested At"],
+      ...(bookings ?? []).map(b => [
+        b.status,
+        b.patientName ?? "",
+        b.ward ?? "",
+        b.visitorName ?? "",
+        b.visitorEmail ?? "",
+        b.visitDate,
+        b.visitTime,
+        `${b.durationMinutes} min`,
+        format(new Date(b.requestedAt), "d MMM yyyy HH:mm"),
+      ]),
+    ];
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `bookings-${format(new Date(), "yyyy-MM-dd")}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Today's approved visits (uses dedicated approved-only query so the panel works regardless of status filter)
+  const todaysVisits = (approvedBookings ?? [])
+    .filter(b => isToday(new Date(b.visitDate)))
+    .sort((a, b) => a.visitTime.localeCompare(b.visitTime));
+
+  // Group bookings: pending first, then sort by visit date, with search filter
+  const sortedBookings = bookings ? [...bookings]
+    .filter(b => {
+      if (!bookingSearch.trim()) return true;
+      const q = bookingSearch.toLowerCase();
+      return (
+        b.patientName?.toLowerCase().includes(q) ||
+        b.visitorName?.toLowerCase().includes(q) ||
+        b.visitorEmail?.toLowerCase().includes(q) ||
+        b.ward?.toLowerCase().includes(q) ||
+        b.status?.toLowerCase().includes(q)
+      );
+    })
+    .sort((a, b) => {
+      if (a.status === 'pending' && b.status !== 'pending') return -1;
+      if (a.status !== 'pending' && b.status === 'pending') return 1;
+      return new Date(a.visitDate).getTime() - new Date(b.visitDate).getTime();
+    }) : [];
 
   return (
     <LayoutWrapper>
@@ -249,30 +376,97 @@ export default function StaffDashboard() {
         </div>
 
         <Tabs defaultValue="requests" className="space-y-4">
-          <TabsList className="h-10">
+          <TabsList className="h-10 flex-wrap">
+            <TabsTrigger value="today" className="text-sm">
+              Today's Schedule
+              {todaysVisits.length > 0 && (
+                <span className="ml-2 bg-emerald-500 text-white text-xs rounded-full px-1.5 h-5 min-w-[20px] flex items-center justify-center font-bold">
+                  {todaysVisits.length}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="requests" className="text-sm">
               Visitor Requests
               {stats && stats.pendingRequests > 0 && (
-                <span className="ml-2 bg-primary text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
+                <span className="ml-2 bg-primary text-white text-xs rounded-full px-1.5 h-5 min-w-[20px] flex items-center justify-center font-bold">
                   {stats.pendingRequests}
                 </span>
               )}
             </TabsTrigger>
             <TabsTrigger value="schedule" className="text-sm">Ward Schedule</TabsTrigger>
+            <TabsTrigger value="patients" className="text-sm">Patient Records</TabsTrigger>
+            <TabsTrigger value="messages" className="text-sm" onClick={() => setUnreadMsgCount(0)}>
+              Family Messages
+              {unreadMsgCount > 0 && (
+                <span className="ml-2 bg-rose-500 text-white text-xs rounded-full px-1.5 h-5 min-w-[20px] flex items-center justify-center font-bold">
+                  {unreadMsgCount}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="activity" className="text-sm">Recent Activity</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="today" className="space-y-0">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-emerald-800 flex items-center gap-2">
+                  <CalendarIcon className="w-4 h-4" />
+                  Today's Schedule — {todaysVisits.length} approved visit{todaysVisits.length !== 1 ? "s" : ""}
+                </h3>
+              </div>
+              {todaysVisits.length === 0 ? (
+                <div className="px-4 py-10 text-center text-slate-400 text-sm">No approved visits scheduled for today.</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {todaysVisits.map(b => {
+                    const meta = parseBookingNotes(b.notes);
+                    return (
+                      <div key={b.id} className="px-4 py-3 flex items-center gap-4 text-sm hover:bg-slate-50 transition-colors">
+                        <span className="font-mono font-semibold text-primary w-14 shrink-0">{b.visitTime}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium text-slate-900">{b.patientName}</span>
+                          {b.ward && <span className="text-slate-400 text-xs ml-2">{b.ward}</span>}
+                        </div>
+                        <div className="text-right min-w-0 shrink-0">
+                          <span className="text-slate-700 text-sm">{b.visitorName}</span>
+                          {meta.relationship && (
+                            <span className="block text-[10px] text-slate-400">{meta.relationship}{meta.visitorCount && meta.visitorCount > 1 ? ` · ${meta.visitorCount} visitors` : ""}</span>
+                          )}
+                        </div>
+                        <span className="text-slate-400 text-xs shrink-0 w-12 text-right">{b.durationMinutes} min</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </TabsContent>
 
           <TabsContent value="requests" className="space-y-0">
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
           <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <h2 className="text-lg font-semibold text-slate-900 flex items-center">
-              <Users className="w-5 h-5 mr-2 text-slate-500" />
-              Visitor Requests
-            </h2>
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-400" />
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-slate-900 flex items-center">
+                <Users className="w-5 h-5 mr-2 text-slate-500" />
+                Visitor Requests
+              </h2>
+              <span className="text-xs text-slate-400 hidden sm:block">
+                Updated {formatDistanceToNow(lastRefreshed, { addSuffix: true })}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Filter className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search patient, visitor…"
+                  value={bookingSearch}
+                  onChange={e => setBookingSearch(e.target.value)}
+                  className="pl-8 pr-3 h-9 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 w-48"
+                />
+              </div>
               <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val as GetBookingsStatus | "all")}>
-                <SelectTrigger className="w-[160px] bg-white h-9" data-testid="select-filter-status">
+                <SelectTrigger className="w-[140px] bg-white h-9" data-testid="select-filter-status">
                   <SelectValue placeholder="Filter by status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -283,6 +477,21 @@ export default function StaffDashboard() {
                   <SelectItem value="cancelled">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
+              <Button variant="outline" size="sm" onClick={exportCSV} className="h-9 gap-1.5 text-slate-600 border-slate-200">
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Export CSV</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleManualRefresh}
+                disabled={refreshing}
+                className="h-9 gap-1.5 text-slate-600 border-slate-200"
+                title="Refresh bookings"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
             </div>
           </div>
 
@@ -351,24 +560,51 @@ export default function StaffDashboard() {
                           <div className="text-sm text-slate-500">
                             {booking.ward || "Unspecified ward"}
                           </div>
-                          {booking.notes && (
-                            <div className="mt-1 text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded inline-block max-w-[200px] truncate" title={booking.notes}>
-                              Note: {booking.notes}
-                            </div>
-                          )}
+                          {booking.notes && (() => {
+                            const meta = parseBookingNotes(booking.notes);
+                            return (
+                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                {meta.relationship && (
+                                  <span className="text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-100 px-1.5 py-0.5 rounded-full">
+                                    {meta.relationship}
+                                  </span>
+                                )}
+                                {meta.visitorCount != null && (
+                                  <span className="text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded-full">
+                                    {meta.visitorCount} visitor{meta.visitorCount !== 1 ? "s" : ""}
+                                  </span>
+                                )}
+                                {meta.userNotes && (
+                                  <span className="text-[10px] text-slate-500 max-w-[160px] truncate" title={meta.userNotes}>
+                                    {meta.userNotes}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell className="text-right">
                           {booking.status === "pending" ? (
                             <div className="flex justify-end gap-2">
-                              <Button 
-                                size="sm" 
-                                variant="outline" 
+                              <Button
+                                size="sm"
+                                variant="outline"
                                 className="text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
                                 onClick={() => openRejectDialog(booking)}
                                 disabled={rejectMutation.isPending || approvePending}
                                 data-testid={`button-reject-${booking.id}`}
                               >
                                 Decline
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                                onClick={() => handleQuickApprove(booking)}
+                                disabled={rejectMutation.isPending || approvePending}
+                                title="Quick approve (no instructions)"
+                              >
+                                <Zap className="w-3.5 h-3.5" />
                               </Button>
                               <Button
                                 size="sm"
@@ -408,7 +644,15 @@ export default function StaffDashboard() {
           </TabsContent>
 
           <TabsContent value="schedule">
-            <WardSchedule bookings={bookings ?? []} />
+            <WardSchedule bookings={approvedBookings ?? []} />
+          </TabsContent>
+
+          <TabsContent value="patients">
+            <StaffPatients staffName={user.name} />
+          </TabsContent>
+
+          <TabsContent value="messages">
+            <StaffMessages />
           </TabsContent>
 
           <TabsContent value="activity">
@@ -535,13 +779,50 @@ export default function StaffDashboard() {
               </div>
             </div>
           )}
+
+          {/* Visitor overlap warning */}
+          {conflictData && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-sm mx-1">
+              <div className="flex items-center gap-2 font-semibold text-amber-800">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                Visitor limit exceeded — {conflictData.totalVisitors} visitors at this time slot
+              </div>
+              <p className="text-amber-700 text-xs">
+                {conflictData.alreadyApproved} visitor{conflictData.alreadyApproved !== 1 ? "s" : ""} already approved for{" "}
+                <strong>{bookingToApprove?.patientName}</strong> in this window.
+                Adding {conflictData.incoming} more exceeds the ICU limit of 2.
+              </p>
+              <div className="border-t border-amber-200 pt-2 space-y-1">
+                {conflictData.overlapping.map(b => {
+                  const count = parseBookingNotes(b.notes).visitorCount ?? 1;
+                  return (
+                    <div key={b.id} className="text-xs text-amber-700 flex justify-between">
+                      <span className="font-medium">{b.visitorName}</span>
+                      <span>{b.visitTime} · {b.durationMinutes} min · {count} visitor{count !== 1 ? "s" : ""}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveDialogOpen(false)} disabled={approvePending}>
+            <Button variant="outline" onClick={() => { setApproveDialogOpen(false); setConflictData(null); }} disabled={approvePending}>
               Cancel
             </Button>
-            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleApprove} disabled={approvePending} data-testid="button-confirm-approve">
-              {approvePending ? "Approving..." : "Approve Visit"}
-            </Button>
+            {conflictData ? (
+              <Button
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={() => handleApprove(true)}
+                disabled={approvePending}
+              >
+                {approvePending ? "Approving..." : "Approve anyway"}
+              </Button>
+            ) : (
+              <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => handleApprove()} disabled={approvePending} data-testid="button-confirm-approve">
+                {approvePending ? "Approving..." : "Approve Visit"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -589,13 +870,30 @@ export default function StaffDashboard() {
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="reason">Reason (Optional but recommended)</Label>
+              <Label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Quick Reasons</Label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  "Ward is on restricted access.",
+                  "Patient is currently too unwell to receive visitors.",
+                  "A medical procedure is scheduled during this time.",
+                  "Visitor limit already reached for this slot.",
+                ].map(r => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setRejectionReason(r)}
+                    className={`text-xs px-2.5 py-1.5 rounded-full border transition-colors ${rejectionReason === r ? "bg-rose-100 text-rose-700 border-rose-300" : "bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300"}`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
               <Textarea
                 id="reason"
-                placeholder="e.g. Ward is currently restricted to essential medical staff only..."
+                placeholder="Or write a custom reason..."
                 value={rejectionReason}
                 onChange={(e) => setRejectionReason(e.target.value)}
-                className="resize-none"
+                className="resize-none h-20"
                 data-testid="input-reject-reason"
               />
             </div>

@@ -1,4 +1,5 @@
 export * from "./users";
 export * from "./bookings";
 export * from "./blocked-slots";
+export * from "./patients";
 //# sourceMappingURL=index.d.ts.map

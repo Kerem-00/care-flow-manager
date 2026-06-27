@@ -76,14 +76,31 @@ export declare const usersTable: import("drizzle-orm/pg-core").PgTableWithColumn
             tableName: "users";
             dataType: "string";
             columnType: "PgText";
-            data: "visitor" | "staff";
+            data: "visitor" | "family" | "staff";
             driverParam: string;
             notNull: true;
             hasDefault: true;
             isPrimaryKey: false;
             isAutoincrement: false;
             hasRuntimeDefault: false;
-            enumValues: ["visitor", "staff"];
+            enumValues: ["visitor", "family", "staff"];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
+        linkedPatientId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "linked_patient_id";
+            tableName: "users";
+            dataType: "number";
+            columnType: "PgInteger";
+            data: number;
+            driverParam: string | number;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
             baseColumn: never;
             identity: undefined;
             generated: undefined;
@@ -114,8 +131,10 @@ export declare const insertUserSchema: z.ZodObject<{
     passwordHash: z.ZodString;
     role: z.ZodOptional<z.ZodEnum<{
         visitor: "visitor";
+        family: "family";
         staff: "staff";
     }>>;
+    linkedPatientId: z.ZodOptional<z.ZodNullable<z.ZodInt>>;
 }, {
     out: {};
     in: {};

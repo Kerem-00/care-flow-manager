@@ -1,43 +1,43 @@
 import { Router, type IRouter } from "express";
-import { db, bookingsTable, usersTable } from "@workspace/db";
+import { db, bookingsTable, usersTable, patientsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireStaff } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
+function timeToMin(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function parseVisitorCount(notes: string | null | undefined): number {
+  if (!notes) return 1;
+  const m = notes.match(/[Vv]isitors?:?\s*(\d+)/);
+  return m ? parseInt(m[1], 10) : 1;
+}
+
 router.get("/bookings", requireAuth, async (req, res): Promise<void> => {
   const session = (req as any).session;
   const statusFilter = req.query.status as string | undefined;
 
-  let query = db.select().from(bookingsTable);
+  // Staff: see all bookings
+  if (session.role === "staff") {
+    const rows = statusFilter
+      ? await db.select().from(bookingsTable).where(eq(bookingsTable.status, statusFilter as any)).orderBy(desc(bookingsTable.requestedAt))
+      : await db.select().from(bookingsTable).orderBy(desc(bookingsTable.requestedAt));
+    res.json(rows);
+    return;
+  }
 
-  if (session.role === "visitor") {
-    if (statusFilter) {
-      const rows = await db.select().from(bookingsTable)
-        .where(and(
-          eq(bookingsTable.userId, session.userId),
-          eq(bookingsTable.status, statusFilter as any)
-        ))
-        .orderBy(desc(bookingsTable.requestedAt));
-      res.json(rows);
-    } else {
-      const rows = await db.select().from(bookingsTable)
+  // Family and visitor: see only their own bookings
+  const rows = statusFilter
+    ? await db.select().from(bookingsTable)
+        .where(and(eq(bookingsTable.userId, session.userId), eq(bookingsTable.status, statusFilter as any)))
+        .orderBy(desc(bookingsTable.requestedAt))
+    : await db.select().from(bookingsTable)
         .where(eq(bookingsTable.userId, session.userId))
         .orderBy(desc(bookingsTable.requestedAt));
-      res.json(rows);
-    }
-  } else {
-    if (statusFilter) {
-      const rows = await db.select().from(bookingsTable)
-        .where(eq(bookingsTable.status, statusFilter as any))
-        .orderBy(desc(bookingsTable.requestedAt));
-      res.json(rows);
-    } else {
-      const rows = await db.select().from(bookingsTable)
-        .orderBy(desc(bookingsTable.requestedAt));
-      res.json(rows);
-    }
-  }
+  res.json(rows);
 });
 
 router.post("/bookings", requireAuth, async (req, res): Promise<void> => {
@@ -108,6 +108,39 @@ router.patch("/bookings/:id/approve", requireStaff, async (req, res): Promise<vo
   if (!existing) {
     res.status(404).json({ error: "Booking not found" });
     return;
+  }
+
+  if (!req.body?.force) {
+    const sameDay = await db.select().from(bookingsTable).where(
+      and(
+        eq(bookingsTable.patientName, existing.patientName),
+        eq(bookingsTable.visitDate, existing.visitDate),
+        eq(bookingsTable.status, "approved"),
+      )
+    );
+
+    const newStart = timeToMin(existing.visitTime);
+    const newEnd = newStart + existing.durationMinutes;
+
+    const overlapping = sameDay.filter(b => {
+      const s = timeToMin(b.visitTime);
+      const e = s + b.durationMinutes;
+      return newStart < e && s < newEnd;
+    });
+
+    const alreadyApproved = overlapping.reduce((sum, b) => sum + parseVisitorCount(b.notes), 0);
+    const incoming = parseVisitorCount(existing.notes);
+
+    if (alreadyApproved + incoming > 2) {
+      res.status(409).json({
+        error: "visitor_overlap",
+        totalVisitors: alreadyApproved + incoming,
+        incoming,
+        alreadyApproved,
+        overlapping,
+      });
+      return;
+    }
   }
 
   const instructions = req.body?.instructions || null;

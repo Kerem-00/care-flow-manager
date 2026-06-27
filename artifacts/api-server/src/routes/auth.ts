@@ -16,7 +16,7 @@ router.post("/auth/register", async (req, res): Promise<void> => {
     return;
   }
 
-  if (!["visitor", "staff"].includes(role)) {
+  if (!["visitor", "family", "staff"].includes(role)) {
     res.status(400).json({ error: "Invalid role" });
     return;
   }
@@ -43,13 +43,13 @@ router.post("/auth/register", async (req, res): Promise<void> => {
     name,
     email,
     passwordHash,
-    role: role as "visitor" | "staff",
+    role: role as "visitor" | "family" | "staff",
   }).returning();
 
   setSession(res, { userId: user.id, role: user.role, name: user.name, email: user.email });
 
   res.status(201).json({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt },
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, jobTitle: user.jobTitle ?? null, createdAt: user.createdAt },
     message: "Account created successfully",
   });
 });
@@ -77,7 +77,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   setSession(res, { userId: user.id, role: user.role, name: user.name, email: user.email });
 
   res.json({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt },
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, jobTitle: user.jobTitle ?? null, createdAt: user.createdAt },
     message: "Login successful",
   });
 });
@@ -101,7 +101,7 @@ router.get("/auth/me", async (req, res): Promise<void> => {
     return;
   }
 
-  res.json({ id: user.id, name: user.name, email: user.email, role: user.role, createdAt: user.createdAt });
+  res.json({ id: user.id, name: user.name, email: user.email, role: user.role, jobTitle: user.jobTitle ?? null, createdAt: user.createdAt });
 });
 
 export default router;

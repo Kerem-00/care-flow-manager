@@ -8,12 +8,14 @@ import NotFound from "@/pages/not-found";
 import AuthPage from "@/pages/auth";
 import VisitorDashboard from "@/pages/visitor-dashboard";
 import StaffDashboard from "@/pages/staff-dashboard";
+import PatientPortal from "@/pages/patient-portal";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: false,
-      refetchOnWindowFocus: false,
+      retry: 1,
+      staleTime: 30_000,
+      refetchOnWindowFocus: true,
     },
   },
 });
@@ -24,6 +26,7 @@ function Router() {
       <Route path="/" component={AuthPage} />
       <Route path="/visitor-dashboard" component={VisitorDashboard} />
       <Route path="/staff-dashboard" component={StaffDashboard} />
+      <Route path="/patient-portal" component={PatientPortal} />
       <Route component={NotFound} />
     </Switch>
   );

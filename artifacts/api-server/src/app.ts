@@ -26,7 +26,11 @@ app.use(
     },
   }),
 );
-app.use(cors({ origin: true, credentials: true }));
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map(o => o.trim())
+  : true; // dev: allow all
+
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser(process.env.SESSION_SECRET || "hospitime-secret"));

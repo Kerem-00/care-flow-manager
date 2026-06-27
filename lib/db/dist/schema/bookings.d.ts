@@ -279,14 +279,14 @@ export declare const bookingsTable: import("drizzle-orm/pg-core").PgTableWithCol
     dialect: "pg";
 }>;
 export declare const insertBookingSchema: z.ZodObject<{
+    ward: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    patientName: z.ZodString;
     userId: z.ZodInt;
     visitorName: z.ZodString;
     visitorEmail: z.ZodString;
     visitDate: z.ZodString;
     visitTime: z.ZodString;
     durationMinutes: z.ZodOptional<z.ZodInt>;
-    patientName: z.ZodString;
-    ward: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     notes: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     staffInstructions: z.ZodOptional<z.ZodNullable<z.ZodString>>;
 }, {

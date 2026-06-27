@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { LayoutWrapper } from "@/components/layout-wrapper";
@@ -20,7 +20,8 @@ import * as z from "zod";
 import { format, isBefore, isToday, isTomorrow, startOfDay } from "date-fns";
 import {
   CalendarIcon, Clock, Calendar as CalendarIconLucide,
-  FileText, CheckCircle2, AlertCircle, Plus, Filter, Users, Info, ShieldAlert
+  FileText, CheckCircle2, AlertCircle, Filter, Users, Info, ShieldAlert,
+  UserCheck, Loader2, HeartPulse
 } from "lucide-react";
 import { parseBookingNotes, buildBookingNotes, BlockedSlot, BLOCK_LABELS, timeToMin, BookingWithInstructions } from "@/lib/booking-utils";
 import { VisitorPlanner } from "@/components/visitor-planner";
@@ -63,12 +64,14 @@ export default function VisitorDashboard() {
   const { user, isLoading: authLoading } = useAuth();
 
   useEffect(() => {
-    if (!authLoading && (!user || user.role !== "visitor")) {
+    if (!authLoading && (!user || (user.role !== "visitor" && (user.role as string) !== "family"))) {
       setLocation("/");
     }
   }, [user, authLoading, setLocation]);
 
-  if (authLoading || !user || user.role !== "visitor") return null;
+  if (authLoading || !user) return null;
+  if ((user.role as string) === "family") return <FamilyBookingsView />;
+  if (user.role !== "visitor") return null;
   return <VisitorDashboardContent />;
 }
 
@@ -77,19 +80,50 @@ function VisitorDashboardContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [plannerPrefill, setPlannerPrefill] = useState<{ date?: string; time?: string }>({});
+  const [plannerKey, setPlannerKey] = useState(0);
+  const [plannerPrefill, setPlannerPrefill] = useState<{ date?: string; time?: string; patientName?: string; ward?: string }>({});
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null);
   const [historyFilter, setHistoryFilter] = useState<string>("all");
 
   const { data: stats, isLoading: statsLoading } = useGetVisitorStats();
-
   const { data: bookings, isLoading: bookingsLoading } = useGetBookings();
-
   const cancelBookingMutation = useCancelBooking();
 
-  const handlePlannerSelect = (date: string, time: string) => {
-    setPlannerPrefill({ date, time });
+  // Poll for booking status changes every 30s and notify the user
+  const prevStatusRef = useRef<Record<number, string>>({});
+  useEffect(() => {
+    const id = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetVisitorStatsQueryKey() });
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (!bookings) return;
+    bookings.forEach(b => {
+      const prev = prevStatusRef.current[b.id];
+      if (prev && prev !== b.status) {
+        if (b.status === "approved") {
+          toast({
+            title: "Visit approved!",
+            description: `Your visit to ${b.patientName} on ${format(new Date(b.visitDate), "d MMM")} at ${b.visitTime} has been confirmed.`,
+          });
+        } else if (b.status === "rejected") {
+          toast({
+            title: "Visit request declined",
+            description: `Your request to visit ${b.patientName} on ${format(new Date(b.visitDate), "d MMM")} was not approved.`,
+            variant: "destructive",
+          });
+        }
+      }
+      prevStatusRef.current[b.id] = b.status;
+    });
+  }, [bookings]);
+
+  const handlePlannerSelect = (date: string, time: string, patientName: string, ward: string) => {
+    setPlannerPrefill({ date, time, patientName, ward });
     setIsDialogOpen(true);
   };
 
@@ -309,34 +343,25 @@ function VisitorDashboardContent() {
         </div>
 
         {/* Plan a Visit */}
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900 mb-4">Plan a Visit</h2>
-          <VisitorPlanner onSelectSlot={handlePlannerSelect} />
-        </div>
+        <VisitorPlanner key={plannerKey} onSelectSlot={handlePlannerSelect} />
 
         {/* Booking History Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h2 className="text-xl font-semibold text-slate-900">Booking History</h2>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-400 shrink-0" />
-              <Select value={historyFilter} onValueChange={setHistoryFilter}>
-                <SelectTrigger className="w-[160px] h-9 bg-white" data-testid="select-history-filter">
-                  <SelectValue placeholder="Filter by status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Requests</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="approved">Approved</SelectItem>
-                  <SelectItem value="rejected">Declined</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <Button onClick={() => setIsDialogOpen(true)} data-testid="button-new-request">
-              <Plus className="w-4 h-4 mr-2" />
-              Request a Visit
-            </Button>
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-slate-400 shrink-0" />
+            <Select value={historyFilter} onValueChange={setHistoryFilter}>
+              <SelectTrigger className="w-[160px] h-9 bg-white" data-testid="select-history-filter">
+                <SelectValue placeholder="Filter by status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Requests</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="approved">Approved</SelectItem>
+                <SelectItem value="rejected">Declined</SelectItem>
+                <SelectItem value="cancelled">Cancelled</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -538,9 +563,12 @@ function VisitorDashboardContent() {
           onSuccess={() => {
             queryClient.invalidateQueries({ queryKey: getGetBookingsQueryKey() });
             queryClient.invalidateQueries({ queryKey: getGetVisitorStatsQueryKey() });
+            setPlannerKey(k => k + 1);
           }}
           prefillDate={plannerPrefill.date}
           prefillTime={plannerPrefill.time}
+          prefillPatientName={plannerPrefill.patientName}
+          prefillWard={plannerPrefill.ward}
         />
       )}
     </LayoutWrapper>
@@ -548,28 +576,55 @@ function VisitorDashboardContent() {
 }
 
 // ─── Request Visit Dialog — isolated component so form hooks are clean ────────
+interface PatientOption { id: number; name: string; ward: string }
+
 function RequestVisitDialog({
   isOpen,
   setIsOpen,
   onSuccess,
   prefillDate,
   prefillTime,
+  prefillPatientName,
+  prefillWard,
 }: {
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
   onSuccess: () => void;
   prefillDate?: string;
   prefillTime?: string;
+  prefillPatientName?: string;
+  prefillWard?: string;
 }) {
   const { toast } = useToast();
   const createBookingMutation = useCreateBooking();
   const [blockedSlots, setBlockedSlots] = useState<BlockedSlot[]>([]);
+  const [patients, setPatients] = useState<PatientOption[]>([]);
+  const [patientQuery, setPatientQuery] = useState(prefillPatientName ?? "");
+  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(
+    prefillPatientName && prefillWard ? { id: 0, name: prefillPatientName, ward: prefillWard } : null
+  );
+  const patientInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetch("/api/patients/search", { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(setPatients)
+      .catch(() => {});
+  }, []);
+
+  const filteredPatients = patientQuery.trim().length === 0
+    ? patients
+    : patients.filter(p =>
+        p.name.toLowerCase().includes(patientQuery.toLowerCase()) ||
+        p.ward.toLowerCase().includes(patientQuery.toLowerCase())
+      );
 
   const form = useForm<z.infer<typeof requestSchema>>({
     resolver: zodResolver(requestSchema),
     defaultValues: {
-      patientName: "",
-      ward: "",
+      patientName: prefillPatientName ?? "",
+      ward: prefillWard ?? "",
       relationship: "",
       visitorCount: 1,
       visitDate: prefillDate ? new Date(prefillDate + "T00:00:00") : undefined,
@@ -631,6 +686,8 @@ function RequestVisitDialog({
           onSuccess();
           setIsOpen(false);
           form.reset();
+          setPatientQuery("");
+          setSelectedPatient(null);
         },
         onError: (error: unknown) => {
           const e = error as { data?: { error?: string }; message?: string };
@@ -690,29 +747,58 @@ function RequestVisitDialog({
               </div>
             )}
 
-            {/* Patient info */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2 col-span-2 sm:col-span-1">
-                <Label htmlFor="patientName">Patient Name</Label>
+            {/* Patient search */}
+            <div className="space-y-2">
+              <Label htmlFor="patientSearch">Patient</Label>
+              <div className="relative">
                 <Input
-                  id="patientName"
-                  placeholder="Full name of patient"
-                  {...form.register("patientName")}
+                  ref={patientInputRef}
+                  id="patientSearch"
+                  placeholder="Search by patient name or ward…"
+                  value={patientQuery}
+                  autoComplete="off"
+                  onChange={e => {
+                    setPatientQuery(e.target.value);
+                    setSelectedPatient(null);
+                    form.setValue("patientName", e.target.value, { shouldValidate: false });
+                    form.setValue("ward", "");
+                    setShowPatientDropdown(true);
+                  }}
+                  onFocus={() => setShowPatientDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowPatientDropdown(false), 150)}
                   data-testid="input-patient-name"
                 />
-                {form.formState.errors.patientName && (
-                  <p className="text-sm text-destructive">{form.formState.errors.patientName.message}</p>
+                {showPatientDropdown && filteredPatients.length > 0 && (
+                  <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+                    {filteredPatients.map(p => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center justify-between gap-3 border-b border-slate-100 last:border-0"
+                        onMouseDown={() => {
+                          setSelectedPatient(p);
+                          setPatientQuery(p.name);
+                          form.setValue("patientName", p.name, { shouldValidate: true });
+                          form.setValue("ward", p.ward, { shouldValidate: true });
+                          setShowPatientDropdown(false);
+                        }}
+                      >
+                        <span className="font-medium text-slate-900 text-sm">{p.name}</span>
+                        <span className="text-xs text-slate-500 shrink-0">{p.ward}</span>
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
-              <div className="space-y-2 col-span-2 sm:col-span-1">
-                <Label htmlFor="ward">Ward (Optional)</Label>
-                <Input
-                  id="ward"
-                  placeholder="e.g. ICU Ward A"
-                  {...form.register("ward")}
-                  data-testid="input-ward"
-                />
-              </div>
+              {selectedPatient && (
+                <p className="text-xs text-emerald-600 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  {selectedPatient.name} · {selectedPatient.ward}
+                </p>
+              )}
+              {form.formState.errors.patientName && (
+                <p className="text-sm text-destructive">{form.formState.errors.patientName.message}</p>
+              )}
             </div>
 
             {/* Relationship + visitor count */}
@@ -878,5 +964,149 @@ function RequestVisitDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── Family: read-only visitor schedule for linked patient ───────────────────
+function FamilyBookingsView() {
+  const { user } = useAuth();
+  const [, setLocation] = useLocation();
+  const { data: bookings, isLoading } = useGetBookings();
+
+  const upcoming = (bookings ?? []).filter(b =>
+    (b.status === "approved" || b.status === "pending") &&
+    !isBefore(new Date(b.visitDate), startOfDay(new Date()))
+  ).sort((a, b) => new Date(a.visitDate).getTime() - new Date(b.visitDate).getTime());
+
+  const past = (bookings ?? []).filter(b =>
+    b.status === "approved" && isBefore(new Date(b.visitDate), startOfDay(new Date()))
+  ).sort((a, b) => new Date(b.visitDate).getTime() - new Date(a.visitDate).getTime());
+
+  const patientName = bookings?.[0]?.patientName?.trim();
+
+  return (
+    <LayoutWrapper>
+      <div className="space-y-8">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+              {patientName ? `Visits to ${patientName}` : "My Bookings"}
+            </h1>
+            <p className="text-slate-500 mt-1">
+              {patientName
+                ? `Your visit bookings for ${patientName}`
+                : "Visits for your loved one will appear here once staff link your account."}
+            </p>
+          </div>
+          <button
+            onClick={() => setLocation("/patient-portal")}
+            className="flex items-center gap-2.5 bg-primary/5 hover:bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 text-left transition-colors shrink-0"
+          >
+            <HeartPulse className="w-5 h-5 text-primary shrink-0" />
+            <div>
+              <p className="text-sm font-semibold text-primary leading-tight">Patient Portal</p>
+              <p className="text-xs text-slate-500 leading-tight">Records, vitals &amp; messages</p>
+            </div>
+          </button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-24">
+            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          </div>
+        ) : (bookings ?? []).length === 0 ? (
+          <div className="text-center py-20 bg-white rounded-xl border border-dashed border-slate-300">
+            <Users className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+            <p className="text-slate-500 font-medium">No visits scheduled yet</p>
+            <p className="text-slate-400 text-sm mt-1">Approved visits for your loved one will appear here.</p>
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {/* Upcoming */}
+            {upcoming.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="text-base font-semibold text-slate-700 flex items-center gap-2">
+                  <CalendarIconLucide className="w-4 h-4 text-primary" />
+                  Upcoming Visits
+                  <span className="text-xs font-normal bg-primary/10 text-primary rounded-full px-2 py-0.5">{upcoming.length}</span>
+                </h2>
+                <div className="grid gap-3">
+                  {upcoming.map(b => <VisitCard key={b.id} booking={b} />)}
+                </div>
+              </div>
+            )}
+
+            {/* Past */}
+            {past.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="text-base font-semibold text-slate-500 flex items-center gap-2">
+                  <Clock className="w-4 h-4" />
+                  Past Visits
+                </h2>
+                <div className="grid gap-3 opacity-70">
+                  {past.slice(0, 5).map(b => <VisitCard key={b.id} booking={b} past />)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </LayoutWrapper>
+  );
+}
+
+function VisitCard({ booking: b, past = false }: { booking: Booking; past?: boolean }) {
+  const meta = parseBookingNotes(b.notes);
+  const d = new Date(b.visitDate);
+  const dateLabel = isToday(d) ? "Today" : isTomorrow(d) ? "Tomorrow" : format(d, "EEEE, d MMM yyyy");
+
+  return (
+    <div className={`bg-white border rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4 ${past ? "border-slate-200" : b.status === "approved" ? "border-emerald-200 shadow-sm" : "border-amber-200 shadow-sm"}`}>
+      {/* Date column */}
+      <div className={`shrink-0 text-center w-16 rounded-xl py-2 ${past ? "bg-slate-100" : b.status === "approved" ? "bg-emerald-50" : "bg-amber-50"}`}>
+        <p className={`text-lg font-bold leading-none ${past ? "text-slate-500" : b.status === "approved" ? "text-emerald-700" : "text-amber-700"}`}>
+          {format(d, "d")}
+        </p>
+        <p className={`text-xs font-medium mt-0.5 ${past ? "text-slate-400" : b.status === "approved" ? "text-emerald-600" : "text-amber-600"}`}>
+          {format(d, "MMM")}
+        </p>
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-semibold text-slate-900 flex items-center gap-1.5">
+            <UserCheck className="w-4 h-4 text-slate-400 shrink-0" />
+            {b.visitorName}
+          </span>
+          {meta.relationship && (
+            <span className="text-xs text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">{meta.relationship}</span>
+          )}
+          <BookingStatusBadge status={b.status} />
+        </div>
+        <div className="flex items-center gap-3 mt-1.5 text-sm text-slate-500 flex-wrap">
+          <span className="flex items-center gap-1">
+            <Clock className="w-3.5 h-3.5" />
+            {b.visitTime} · {b.durationMinutes} min
+          </span>
+          {meta.visitorCount && meta.visitorCount > 1 && (
+            <span className="flex items-center gap-1">
+              <Users className="w-3.5 h-3.5" />
+              {meta.visitorCount} visitors
+            </span>
+          )}
+        </div>
+        {!past && b.status === "pending" && (
+          <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
+            <AlertCircle className="w-3 h-3" /> Awaiting ward staff approval
+          </p>
+        )}
+      </div>
+
+      {/* Day label */}
+      <div className="shrink-0 text-right hidden sm:block">
+        <p className={`text-sm font-medium ${isToday(d) ? "text-primary" : "text-slate-500"}`}>{dateLabel}</p>
+      </div>
+    </div>
   );
 }

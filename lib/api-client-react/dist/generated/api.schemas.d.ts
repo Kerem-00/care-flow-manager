@@ -43,6 +43,7 @@ export interface User {
     name: string;
     email: string;
     role: UserRole;
+    jobTitle: string | null;
     createdAt: string;
 }
 export interface AuthResponse {

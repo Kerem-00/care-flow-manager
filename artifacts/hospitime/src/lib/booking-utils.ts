@@ -1,7 +1,7 @@
-// Structured notes are stored as: "[Rel: Spouse | Visitors: 2]\nOptional user notes"
-// Old bookings without this prefix are displayed as-is.
-
+// New format: "[Rel: Spouse | Visitors: 2]\nOptional user notes"
+// Legacy format: "Relationship: Spouse / Partner|Visitors: 1"
 const BOOKING_META_RE = /^\[Rel: (.*?) \| Visitors: (\d+)\]\n?/;
+const LEGACY_META_RE = /^Relationship: ([^|]+)\|Visitors: (\d+)/;
 
 export interface BookingMeta {
   relationship: string | null;
@@ -12,12 +12,22 @@ export interface BookingMeta {
 export function parseBookingNotes(notes: string | null | undefined): BookingMeta {
   if (!notes) return { relationship: null, visitorCount: null, userNotes: null };
   const match = notes.match(BOOKING_META_RE);
-  if (!match) return { relationship: null, visitorCount: null, userNotes: notes };
-  return {
-    relationship: match[1],
-    visitorCount: parseInt(match[2], 10),
-    userNotes: notes.replace(BOOKING_META_RE, "").trim() || null,
-  };
+  if (match) {
+    return {
+      relationship: match[1],
+      visitorCount: parseInt(match[2], 10),
+      userNotes: notes.replace(BOOKING_META_RE, "").trim() || null,
+    };
+  }
+  const legacy = notes.match(LEGACY_META_RE);
+  if (legacy) {
+    return {
+      relationship: legacy[1].trim(),
+      visitorCount: parseInt(legacy[2], 10),
+      userNotes: null,
+    };
+  }
+  return { relationship: null, visitorCount: null, userNotes: notes };
 }
 
 export function buildBookingNotes(relationship: string, visitorCount: number, notes: string): string {
@@ -68,9 +78,9 @@ export const addMinutesToTime = (time: string, minutes: number): string => {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 };
 
-// Timeline: 08:00 – 18:00 (600 minutes)
-const TIMELINE_START = 8 * 60;
-const TIMELINE_END = 18 * 60;
+// Timeline: 00:00 – 24:00 (1440 minutes)
+const TIMELINE_START = 0;
+const TIMELINE_END = 24 * 60;
 const TIMELINE_SPAN = TIMELINE_END - TIMELINE_START;
 
 export const getTimePercent = (time: string): number =>
