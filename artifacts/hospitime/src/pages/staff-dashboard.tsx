@@ -376,8 +376,8 @@ export default function StaffDashboard() {
         </div>
 
         <Tabs defaultValue="requests" className="space-y-4">
-          <TabsList className="h-10 flex-wrap">
-            <TabsTrigger value="today" className="text-sm">
+          <TabsList className="h-10 w-full overflow-x-auto flex-nowrap justify-start no-scrollbar">
+            <TabsTrigger value="today" className="text-sm shrink-0">
               Today's Schedule
               {todaysVisits.length > 0 && (
                 <span className="ml-2 bg-emerald-500 text-white text-xs rounded-full px-1.5 h-5 min-w-[20px] flex items-center justify-center font-bold">
@@ -385,7 +385,7 @@ export default function StaffDashboard() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="requests" className="text-sm">
+            <TabsTrigger value="requests" className="text-sm shrink-0">
               Visitor Requests
               {stats && stats.pendingRequests > 0 && (
                 <span className="ml-2 bg-primary text-white text-xs rounded-full px-1.5 h-5 min-w-[20px] flex items-center justify-center font-bold">
@@ -393,9 +393,9 @@ export default function StaffDashboard() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="schedule" className="text-sm">Ward Schedule</TabsTrigger>
-            <TabsTrigger value="patients" className="text-sm">Patient Records</TabsTrigger>
-            <TabsTrigger value="messages" className="text-sm" onClick={() => setUnreadMsgCount(0)}>
+            <TabsTrigger value="schedule" className="text-sm shrink-0">Ward Schedule</TabsTrigger>
+            <TabsTrigger value="patients" className="text-sm shrink-0">Patient Records</TabsTrigger>
+            <TabsTrigger value="messages" className="text-sm shrink-0" onClick={() => setUnreadMsgCount(0)}>
               Family Messages
               {unreadMsgCount > 0 && (
                 <span className="ml-2 bg-rose-500 text-white text-xs rounded-full px-1.5 h-5 min-w-[20px] flex items-center justify-center font-bold">
@@ -403,7 +403,7 @@ export default function StaffDashboard() {
                 </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="activity" className="text-sm">Recent Activity</TabsTrigger>
+            <TabsTrigger value="activity" className="text-sm shrink-0">Recent Activity</TabsTrigger>
           </TabsList>
 
           <TabsContent value="today" className="space-y-0">
