@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://hospitime-api.onrender.com/api/:path*" }
+  ],
+  "buildCommand": "pnpm --filter @workspace/hospitime run build",
+  "outputDirectory": "artifacts/hospitime/dist",
+  "installCommand": "pnpm install"
+}
